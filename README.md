@@ -15,31 +15,37 @@ the analysis API is independent of the UI and WLX integration.
 
 - Linux (Ubuntu 24.04 or newer).
 - A C++20 compiler, CMake 3.20+, and pkg-config.
-- Qt **6.7 or newer**, with Widgets development files.
+- Qt 5 or Qt 6, with Widgets development files.
 - elfutils libelf development files.
-- Double Commander built with **Qt6**, using a compatible Qt runtime.
+- Double Commander built with the same Qt major version as the plugin, using a
+  compatible Qt runtime.
 
 Development package names on Ubuntu are `build-essential`, `cmake`, `pkg-config`,
-`qt6-base-dev`, and `libelf-dev`. Stock Ubuntu 24.04's Qt 6.4 packages do **not**
-satisfy the minimum version; use an environment with suitable packaged Qt6
-libraries that also match your Double Commander build. GTK and Qt5 builds of
-Double Commander are unsupported.
+`qt6-base-dev` (Qt 6) or `qtbase5-dev` (Qt 5), and `libelf-dev`.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ```
 
-The plugin is `build/file_info_qt6.wlx`. The bundled `sdk/` contains the Double
-Commander plugin headers. No SDK download or extra source library is needed.
-Only the four implemented WLX entry points are exported.
+By default, CMake uses Qt 6 and builds `build/exe_file_info_qt6.wlx`. To build
+with Qt 5, select it when configuring:
+
+```sh
+cmake -S . -B build-qt5 -DCMAKE_BUILD_TYPE=Release -DUSE_QT_MAJOR_VERSION=5
+cmake --build build-qt5 --parallel
+```
+
+That produces `build-qt5/exe_file_info_qt5.wlx`. The bundled `sdk/` contains the
+Double Commander plugin headers. No SDK download or extra source library is
+needed. Only the four implemented WLX entry points are exported.
 
 For standalone manual inspection:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_DEMO_VIEWER=ON
 cmake --build build --parallel
-./build/file_info /bin/ls
+./build/exe_file_info /bin/ls
 ```
 
 For multiple Qt installations, set `CMAKE_PREFIX_PATH` when configuring and ensure
@@ -47,14 +53,15 @@ the host and plugin load compatible libraries. Do not mix Qt toolkit versions.
 
 ## Installation and use
 
-Keep `file_info_qt6.wlx` in a persistent directory. In Double Commander, open
+Keep `exe_file_info_qt5.wlx` or `exe_file_info_qt6.wlx` in a persistent
+directory, matching the Qt major version used by Double Commander. In Double Commander, open
 **Configuration → Options → Plugins → Viewer plugins (.WLX)**, choose **Add**,
 and select the plugin. Enable it and place it ahead of other viewers that match
 ELF files. Open an ELF file with the internal viewer (F3).
 
 Optional staged installation is supported with `cmake --install build --prefix
 /path/to/staging`; this places the plugin under
-`lib/doublecmd/plugins/wlx/file_info`. Register that file in Double Commander as
+`lib/doublecmd/plugins/wlx/exe_file_info`. Register that file in Double Commander as
 above. CMake does not edit your Double Commander configuration.
 
 Select properties and use their context menu to copy names and values.
