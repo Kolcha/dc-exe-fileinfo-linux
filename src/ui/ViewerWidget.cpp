@@ -27,7 +27,7 @@ ViewerWidget::ViewerWidget(QWidget* parent) : QWidget(parent) {
     auto* generalPage=new QWidget(tabs_); auto* gl=new QVBoxLayout(generalPage);
     generalWarning_=warning(generalPage); gl->addWidget(generalWarning_);
     general_=new QTreeWidget(generalPage); general_->setColumnCount(2); general_->setHeaderLabels({"Property","Value"});
-    general_->setSelectionMode(QAbstractItemView::ExtendedSelection); general_->setSelectionBehavior(QAbstractItemView::SelectItems);
+    general_->setSelectionMode(QAbstractItemView::ExtendedSelection); general_->setSelectionBehavior(QAbstractItemView::SelectRows);
     general_->setEditTriggers(QAbstractItemView::NoEditTriggers); general_->header()->setSectionResizeMode(0,QHeaderView::ResizeToContents);
     gl->addWidget(general_); tabs_->addTab(generalPage,"General");
     auto* depPage=new QWidget(tabs_); auto* dl=new QVBoxLayout(depPage);
