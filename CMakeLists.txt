@@ -12,7 +12,7 @@ add_library(binary_analysis STATIC src/analysis/ElfAnalyzer.cpp src/analysis/Dep
 target_include_directories(binary_analysis PUBLIC src)
 target_link_libraries(binary_analysis PRIVATE PkgConfig::LIBELF)
 set_target_properties(binary_analysis PROPERTIES CXX_VISIBILITY_PRESET hidden)
-add_library(file_info_ui STATIC src/ui/ViewerWidget.cpp src/ui/DependenciesModel.cpp)
+add_library(file_info_ui STATIC src/ui/ViewerWidget.cpp src/ui/DependenciesModel.cpp src/ui/SymbolsWidget.cpp)
 target_link_libraries(file_info_ui PUBLIC binary_analysis Qt::Widgets)
 set_target_properties(file_info_ui PROPERTIES CXX_VISIBILITY_PRESET hidden)
 set(plugin_target exe_file_info_qt${USE_QT_MAJOR_VERSION})

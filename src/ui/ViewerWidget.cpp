@@ -1,5 +1,6 @@
 #include "ViewerWidget.h"
 #include "DependenciesModel.h"
+#include "SymbolsWidget.h"
 #include <QApplication>
 #include <QClipboard>
 #include <QHeaderView>
@@ -35,7 +36,8 @@ ViewerWidget::ViewerWidget(QWidget* parent) : QWidget(parent) {
     dependencies_=new QTreeView(depPage); dependencies_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     dependencies_->setEditTriggers(QAbstractItemView::NoEditTriggers); dependencies_->setUniformRowHeights(true);
     dl->addWidget(dependencies_); tabs_->addTab(depPage,"Dependencies");
-    connect(tabs_,&QTabWidget::currentChanged,this,[this](int tab){ if(tab==1) populateDependencies(); });
+    symbols_=new SymbolsWidget(tabs_); tabs_->addTab(symbols_,"Symbols");
+    connect(tabs_,&QTabWidget::currentChanged,this,[this](int tab){ if(tab==1) populateDependencies(); if(tab==2) symbols_->populate(); });
     general_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(general_,&QWidget::customContextMenuRequested,this,[this](const QPoint& point){
         QMenu menu(this); auto* copy=menu.addAction("Copy selected properties");
@@ -63,6 +65,7 @@ ViewerWidget::ViewerWidget(QWidget* parent) : QWidget(parent) {
 }
 bool ViewerWidget::load(const fs::path& path) {
     tabs_->setCurrentIndex(0);
+    symbols_->reset(path);
     dependencies_->setModel(nullptr); delete model_; model_=nullptr;
     resolver_.reset(); current_.reset(); analysis_.clear();
     general_->clear(); generalWarning_->clear(); generalWarning_->setToolTip({}); generalWarning_->setAccessibleDescription({}); generalWarning_->hide();

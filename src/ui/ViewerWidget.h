@@ -7,6 +7,7 @@ class QTreeWidget;
 class QLabel;
 namespace fileinfo {
 class DependenciesModel;
+class SymbolsWidget;
 class ViewerWidget final : public QWidget {
 public:
     explicit ViewerWidget(QWidget* parent=nullptr);
@@ -14,6 +15,7 @@ public:
 private:
     void populateDependencies();
     QTabWidget* tabs_;
+    SymbolsWidget* symbols_;
     QTreeWidget* general_;
     QTreeView* dependencies_;
     QLabel *generalWarning_, *dependencyWarning_;

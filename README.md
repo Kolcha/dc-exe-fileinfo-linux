@@ -124,3 +124,14 @@ symbol/disassembly browser, file monitoring, or cache shared across viewers.
 No automated test suite or test framework is included. See
 [manual verification notes](MANUAL-VERIFICATION.md) for the checks performed and
 the remaining live-host acceptance check.
+
+The **Symbols** tab loads dynamic ELF symbols on first activation. Switch between
+Exports and Imports, filter by original or demangled name, toggle C++ demangling,
+and sort columns (addresses and sizes sort numerically). The context menu copies
+original symbol names; tooltips preserve their spelling. GNU symbol versions appear
+in a separate column, with `@@` marking default exports and `@` other exports.
+Sectionless ELF files are supported through dynamic metadata and ELF/GNU hashes.
+Symbols are cached only for the current viewer and reset when another file loads.
+Static symbol tables, provider resolution, DWARF and disassembly are outside scope.
+Malformed metadata produces recoverable diagnostics; parsing is synchronous and
+bounded to one million dynamic symbols.

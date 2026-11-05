@@ -277,3 +277,91 @@ AnalysisResult ElfAnalyzer::inspect(const fs::path& path) const {
     return r;
 }
 }
+
+#include "Symbols.h"
+#include <cxxabi.h>
+#include <cstdlib>
+#include <map>
+namespace fileinfo {
+SymbolAnalysisResult analyzeSymbols(const fs::path& path) {
+    SymbolAnalysisResult r;
+    auto warn=[&](const char* s){ r.status=AnalysisStatus::Partial; if(r.diagnostics.size()<128) r.diagnostics.push_back({DiagnosticSeverity::Warning,s}); };
+    File f(path); struct stat st{};
+    if(f.fd<0 || fstat(f.fd,&st) || !S_ISREG(st.st_mode) || st.st_size<0 || elf_version(EV_CURRENT)==EV_NONE) {warn("Cannot open ELF file."); r.status=AnalysisStatus::Error; return r;}
+    std::unique_ptr<Elf,ElfCloser> e(elf_begin(f.fd,ELF_C_READ,nullptr)); GElf_Ehdr eh{};
+    if(!e || !gelf_getehdr(e.get(),&eh)) {warn("Invalid ELF header."); return r;}
+    if(eh.e_type!=ET_DYN && eh.e_type!=ET_EXEC && eh.e_type!=ET_REL) {r.status=AnalysisStatus::Unsupported; return r;}
+    // All traversal limits are independent of file size: one million symbols,
+    // 65536 metadata records, 64 MiB strings, and 256 MiB total decoded names.
+    constexpr uint64_t limit=1000000;
+    std::vector<GElf_Phdr> loads; std::map<int64_t,uint64_t> tags;
+    size_t n=0; elf_getphdrnum(e.get(),&n);
+    if(n>65536) {warn("Too many program headers."); return r;}
+    for(size_t i=0;i<n;++i) {GElf_Phdr p{}; if(!gelf_getphdr(e.get(),i,&p) || !within(p.p_offset,p.p_filesz,st.st_size)) {warn("Invalid program segment."); continue;} if(p.p_type==PT_LOAD) loads.push_back(p);
+        if(p.p_type==PT_DYNAMIC) {auto z=gelf_fsize(e.get(),ELF_T_DYN,1,EV_CURRENT); if(!z || p.p_filesz/z>65536) {warn("Invalid dynamic segment."); continue;} auto*d=elf_getdata_rawchunk(e.get(),p.p_offset,p.p_filesz,ELF_T_DYN); if(!d) continue;
+            for(size_t j=0;j<p.p_filesz/z;++j){GElf_Dyn v{}; if(!gelf_getdyn(d,j,&v)) break; if(v.d_tag==DT_NULL) break; tags.emplace(v.d_tag,v.d_un.d_val);}
+        }
+    }
+    auto offset=[&](uint64_t a,uint64_t z)->std::optional<uint64_t>{for(auto&p:loads) if(a>=p.p_vaddr && within(a-p.p_vaddr,z,p.p_filesz)) return p.p_offset+a-p.p_vaddr; return {};};
+    auto chunk=[&](uint64_t a,uint64_t z,Elf_Type t)->Elf_Data*{auto o=offset(a,z); return o ? elf_getdata_rawchunk(e.get(),*o,z,t):nullptr;};
+    auto word=[&](uint64_t a)->std::optional<uint32_t>{auto*d=chunk(a,4,ELF_T_WORD); if(!d || !d->d_buf) return {}; return *static_cast<uint32_t*>(d->d_buf);};
+    uint64_t count=0,symoff=0,stroff=0,strsize=0;
+    const auto entsize=gelf_fsize(e.get(),ELF_T_SYM,1,EV_CURRENT);
+    size_t sections=0; elf_getshdrnum(e.get(),&sections);
+    if(sections>limit) {warn("Section limit exceeded."); sections=0;}
+    for(size_t i=0;i<sections;++i){GElf_Shdr s{},str{}; auto*sc=elf_getscn(e.get(),i); if(!sc || !gelf_getshdr(sc,&s) || s.sh_type!=SHT_DYNSYM) continue;
+        auto*ss=elf_getscn(e.get(),s.sh_link); if(s.sh_entsize!=entsize || !ss || !gelf_getshdr(ss,&str) || !within(s.sh_offset,s.sh_size,st.st_size) || !within(str.sh_offset,str.sh_size,st.st_size)) {warn("Invalid dynamic symbol section."); continue;}
+        count=s.sh_size/entsize; symoff=s.sh_offset; stroff=str.sh_offset; strsize=str.sh_size; break;
+    }
+    if(!count && tags.count(DT_SYMTAB)) {
+        if(tags[DT_SYMENT]!=entsize) {warn("Invalid dynamic symbol entry size."); return r;}
+        if(tags.count(DT_HASH)) {auto a=tags[DT_HASH]; auto buckets=word(a), chains=word(a+4); if(buckets && chains && *chains<=limit && offset(a,8+4ull*(*buckets+uint64_t(*chains)))) count=*chains; else warn("Invalid ELF hash table.");}
+        if(!count && tags.count(DT_GNU_HASH)) {
+            auto a=tags[DT_GNU_HASH]; auto nb=word(a),base=word(a+4), bloom=word(a+8);
+            if(nb && base && bloom && *nb<=limit && *base<=limit && *bloom<=limit && *bloom) {
+                uint64_t buckets=a+16+uint64_t(*bloom)*(gelf_getclass(e.get())==ELFCLASS64?8:4); uint64_t chains=buckets+4ull*(*nb); count=*base;
+                uint64_t work=0;
+                for(uint64_t b=0;b<*nb;++b){auto v=word(buckets+4*b); if(!v){warn("Truncated GNU hash buckets."); break;} if(!*v) continue; if(*v<*base || *v>=limit){warn("Invalid GNU hash index."); continue;}
+                    uint64_t j=*v; for(;;++j){if(j>=limit || ++work>limit){warn("GNU hash safety limit reached."); break;} auto c=word(chains+4*(j-*base)); if(!c){warn("Truncated GNU hash chain."); break;} count=std::max(count,j+1); if(*c&1) break;}
+                    if(work>limit) break;
+                }
+            } else warn("Invalid GNU hash header.");
+        }
+        auto so=offset(tags[DT_SYMTAB],count*entsize), to=offset(tags[DT_STRTAB],tags[DT_STRSZ]);
+        if(!count || !so || !to){warn("Cannot safely determine dynamic symbol range."); return r;} symoff=*so; stroff=*to; strsize=tags[DT_STRSZ];
+    }
+    if(!count) return r;
+    if(count>limit || strsize>64*1024*1024 || !entsize) {warn("Symbol safety limit exceeded."); return r;}
+    std::string strings(strsize,'\0'); if(!readAt(f.fd,stroff,strings.data(),strings.size())) {warn("Cannot read symbol strings."); return r;}
+    auto name=[&](uint64_t i)->std::string{if(i>=strings.size()){warn("Invalid symbol string offset."); return {};} auto end=strings.find('\0',i); if(end==std::string::npos){warn("Unterminated symbol string."); return {};} return strings.substr(i,end-i);};
+    std::map<unsigned,std::string> versions;
+    auto versionsAt=[&](bool definitions){auto tag=definitions?DT_VERDEF:DT_VERNEED; auto num=definitions?DT_VERDEFNUM:DT_VERNEEDNUM; if(!tags.count(tag)) return;
+        uint64_t a=tags[tag], total=tags[num]; if(total>65536){warn("Version traversal limit exceeded."); return;}
+        for(uint64_t i=0;i<total;++i){uint64_t next=0;
+            if(definitions){auto*d=chunk(a,20,ELF_T_VDEF); GElf_Verdef v{}; if(!d || !gelf_getverdef(d,0,&v)){warn("Invalid version definition."); break;} next=v.vd_next;
+                auto*x=chunk(a+v.vd_aux,8,ELF_T_VDEF); GElf_Verdaux aux{}; if(x && gelf_getverdaux(x,0,&aux)) versions[v.vd_ndx&0x7fff]=name(aux.vda_name); else warn("Invalid version definition name.");
+            }else{auto*d=chunk(a,16,ELF_T_VNEED); GElf_Verneed v{}; if(!d || !gelf_getverneed(d,0,&v)){warn("Invalid version requirement."); break;} next=v.vn_next; uint64_t b=a+v.vn_aux;
+                for(unsigned j=0;j<v.vn_cnt;++j){auto*x=chunk(b,16,ELF_T_VNEED); GElf_Vernaux aux{}; if(!x || !gelf_getvernaux(x,0,&aux)){warn("Invalid required version name."); break;} versions[aux.vna_other&0x7fff]=name(aux.vna_name); if(j+1<v.vn_cnt && aux.vna_next<16){warn("Invalid version chain."); break;} b+=aux.vna_next;}
+            }
+            if(i+1<total && next<(definitions?20u:16u)){warn("Invalid version chain."); break;} a+=next;
+        }
+    }; versionsAt(true); versionsAt(false);
+    auto* data=elf_getdata_rawchunk(e.get(),symoff,count*entsize,ELF_T_SYM);
+    auto* vers=tags.count(DT_VERSYM)?chunk(tags[DT_VERSYM],count*2,ELF_T_HALF):nullptr;
+    if(tags.count(DT_VERSYM) && !vers) warn("Invalid symbol version table.");
+    size_t budget=256*1024*1024;
+    for(uint64_t i=1;data && i<count;++i){GElf_Sym s{}; if(!gelf_getsym(data,i,&s)){warn("Invalid dynamic symbol."); break;} auto bind=GELF_ST_BIND(s.st_info),type=GELF_ST_TYPE(s.st_info),vis=GELF_ST_VISIBILITY(s.st_other);
+        if((bind!=STB_GLOBAL && bind!=STB_WEAK && bind!=STB_GNU_UNIQUE) || type==STT_SECTION || type==STT_FILE || (s.st_shndx!=SHN_UNDEF && (vis==STV_HIDDEN || vis==STV_INTERNAL))) continue;
+        DynamicSymbol x; x.originalName=name(s.st_name); if(x.originalName.empty()) continue;
+        int status=0; std::unique_ptr<char,decltype(&std::free)> dem(abi::__cxa_demangle(x.originalName.c_str(),nullptr,nullptr,&status),&std::free); x.demangledName=status==0 && dem?dem.get():x.originalName;
+        if(x.originalName.size()+x.demangledName.size()>budget){warn("Symbol name memory limit reached."); break;} budget-=x.originalName.size()+x.demangledName.size();
+        x.imported=s.st_shndx==SHN_UNDEF; x.value=s.st_value; x.size=s.st_size; x.symbolIndex=i;
+        x.binding=bind==STB_GLOBAL?"Global":bind==STB_WEAK?"Weak":"GNU unique"; x.visibility=vis==STV_DEFAULT?"Default":vis==STV_PROTECTED?"Protected":vis==STV_HIDDEN?"Hidden":"Internal";
+        x.type=type==STT_FUNC?"Function":type==STT_OBJECT?"Object":type==STT_TLS?"TLS":type==STT_GNU_IFUNC?"IFUNC":type==STT_NOTYPE?"No type":"Unknown ("+hex(type)+")";
+        if(vers){auto v=static_cast<Elf64_Half*>(vers->d_buf)[i]; unsigned idx=v&0x7fff; if(idx>1){auto it=versions.find(idx); if(it!=versions.end()) x.version=it->second; else warn("Unknown symbol version index."); x.defaultVersion=!x.imported && !(v&0x8000);}}
+        r.symbols.push_back(std::move(x));
+    }
+    if(!data) warn("Cannot decode dynamic symbols.");
+    return r;
+}
+}
