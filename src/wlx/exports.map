@@ -1,0 +1,8 @@
+{
+  global:
+    ListLoad;
+    ListLoadNext;
+    ListCloseWindow;
+    ListGetDetectString;
+  local: *;
+};
